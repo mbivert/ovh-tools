@@ -1,0 +1,57 @@
+.Dd $Mdocdate$
+.Dt ovh-do 1
+.Os ovh-do 1.0a
+.Sh NAME
+.Nm ovh-do
+.Nd OVH API access
+.Sh SYNOPSIS
+.Nm
+.Bk -words
+.Op Fl h
+.Ek
+.Nm
+.Bk -words
+.Ar ls-vps
+.Ek
+.Nm
+.Bk -words
+.Ar ls-apps
+.Ek
+.Nm
+.Bk -words
+.Ar rm-apps
+.Ar name|id ...
+.Ek
+.Nm
+.Bk -words
+.Ar get-console
+.Ar vps
+.Ek
+.Nm
+.Bk -words
+.Ar ls-ips
+.Ar vps
+.Ek
+.Nm
+.Bk -words
+.Ar ls-keys
+.Ek
+.Nm
+.Bk -words
+.Ar rm-keys
+.Ar keyname ...
+.Ek
+.Nm
+.Bk -words
+.Ar add-key
+.Op keyname Op path/to/key|key
+.Ek
+.Sh DESCRIPTION
+.Nm
+wraps access to the OVH HTTP API. It
+.Em requires
+a
+.Pa $HOME/.ovh.conf .
+TODO
+.Sh EXAMPLES
+TODO
