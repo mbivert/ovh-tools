@@ -70,35 +70,36 @@ type GetMeApiCredentialId struct {
 type DeleteMeApiCredentialId struct {}
 
 // https://api.ovh.com/console/#/vps~GET
-type GetVps []string
+type GetVPS []string
 
 // https://api.ovh.com/console/#/vps/%7BserviceName%7D~GET
-type GetVpsIdModel struct {
+type GetVPSNameModel struct {
 	VCore    int           `json:"vcore"`
 	Disk     int           `json:"disk"`
 	Memory   int           `json:"memory"`
 	// TODO: incomplete
 }
-type GetVpsId struct {
-	State    string        `json:"state"`
-	VCore    int           `json:"vcore"`
-	Model    GetVpsIdModel `json:"model"`
+type GetVPSName struct {
+	State    string          `json:"state"`
+	VCore    int             `json:"vcore"`
+	Model    GetVPSNameModel `json:"model"`
+	Name     string          `json:"name"`
 	// TODO: incomplete
 }
 
 // https://api.ovh.com/console/#/vps/%7BserviceName%7D/ips~GET
-type GetVpsIdIps []string
+type GetVPSNameIps []string
 
 // https://api.ovh.com/console/#/vps/%7BserviceName%7D/datacenter~GET
-type GetVpsIdDatacenter struct {
+type GetVPSNameDatacenter struct {
 	LongName   string        `json:"longName"`
 	Name       string        `json:"name"`
 	Country    string        `json:"country"`
 }
 
 // https://api.ovh.com/console/#/vps/%7BserviceName%7D/getConsoleUrl~POST
-type PostInVpsIdGetConsole struct {}
-type PostOutVpsIdGetConsole string
+type PostInVPSNameGetConsole struct {}
+type PostOutVPSNameGetConsole string
 
 // https://api.ovh.com/console/#/me/api/application/%7BapplicationId%7D~DELETE
 type DeleteMeApiApplicationId struct {}
@@ -122,6 +123,15 @@ type PostInMeSSHKey struct {
 	KeyName string  `json:"keyName"`
 }
 type PostOutMeSSHKey struct {}
+
+// https://api.ovh.com/console/#/vps/%7BserviceName%7D/images/available~GET
+type GetVPSNameImagesAvailable []string
+
+// https://api.ovh.com/console/#/vps/%7BserviceName%7D/images/available/%7Bid%7D~GET
+type GetVPSNameImagesAvailableId struct {
+	Id   string `json:"id"`
+	Name string `json:"name"`
+}
 
 func isValidated(c *ovh.Client) (bool, error) {
 	var y GetMe
@@ -299,17 +309,29 @@ func help(n int) {
 	os.Exit(n)
 }
 
-func foreachApp(c *ovh.Client, f func(*ovh.Client, *GetMeApiApplicationId) (error, bool)) error {
-	var xs GetMeApiApplication
-	var y GetMeApiApplicationId
-	if err := c.Get("/me/api/application", &xs); err != nil {
+// XXX generic experimentation; perhaps they are better approaches
+// let's see where this goes.
+//
+// This is a bit clumsy so far, but works.
+type Item interface {
+	GetMeApiApplicationId | GetVPSName | GetMeSSHKeyName | GetVPSNameImagesAvailableId
+}
+type ItemId interface { string | int }
+func id[T any](x T) T { return x }
+
+func forEachItem[T Item, U ItemId](c *ovh.Client, r string,
+		f func(T) (bool, error), g func(U) string) error {
+	var xs []U
+	var y T
+	if err := c.Get(r, &xs); err != nil {
 		return err
 	}
+
 	for _, x := range xs {
-		if err := c.Get("/me/api/application/"+strconv.Itoa(x), &y); err != nil {
+		if err := c.Get(r+"/"+g(x), &y); err != nil {
 			return err
 		}
-		err, stop := f(c, &y)
+		stop, err := f(y)
 		if err != nil {
 			return err
 		}
@@ -317,15 +339,17 @@ func foreachApp(c *ovh.Client, f func(*ovh.Client, *GetMeApiApplicationId) (erro
 			break
 		}
 	}
+
 	return nil
 }
 
 func lsapps(c *ovh.Client) error {
-	return foreachApp(c, func(_ *ovh.Client, y *GetMeApiApplicationId) (error, bool) {
-		fmt.Printf("%s %d %s %s\n", y.Name, y.ApplicationId, y.Status, y.Description)
-		return nil, false
-	})
-
+	return forEachItem(c,
+		"/me/api/application",
+		func(y GetMeApiApplicationId) (bool, error) {
+			fmt.Printf("%s %d %s %s\n", y.Name, y.ApplicationId, y.Status, y.Description)
+			return false, nil
+		}, strconv.Itoa)
 }
 
 // NOTE: we assume a to either be an integer (ie. an ID) or
@@ -336,13 +360,17 @@ func rmapp(c *ovh.Client, a string) error {
 
 	if err != nil {
 		id = -1
-		err := foreachApp(c, func(_ *ovh.Client, y *GetMeApiApplicationId) (error, bool) {
-			if y.Name == a {
-				id = y.ApplicationId
-				return nil, true
-			}
-			return nil, false
-		})
+
+		err := forEachItem(c,
+			"/me/api/application",
+			func(y GetMeApiApplicationId) (bool, error) {
+				if y.Name == a {
+					id = y.ApplicationId
+					return true, nil
+				}
+				return false, nil
+		}, strconv.Itoa)
+
 		if err != nil {
 			return err
 		}
@@ -356,40 +384,35 @@ func rmapp(c *ovh.Client, a string) error {
 }
 
 func lsvps(c *ovh.Client) error {
-	var xs GetVps
-	if err := c.Get("/vps", &xs); err != nil {
-		return err
-	}
+	return forEachItem(c,
+		"/vps",
+		func(y GetVPSName) (bool, error) {
+			var ips GetVPSNameIps
+			var dc GetVPSNameDatacenter
+			x := y.Name
 
-	for _, x := range xs {
-		var y GetVpsId
-		var ips GetVpsIdIps
-		var dc GetVpsIdDatacenter
-		if err := c.Get("/vps/"+x, &y); err != nil {
-			return err
-		}
-		if err := c.Get("/vps/"+x+"/ips", &ips); err != nil {
-			return err
-		}
-		if err := c.Get("/vps/"+x+"/datacenter", &dc); err != nil {
-			return err
-		}
-		fmt.Printf("%s:\n", x)
-		fmt.Printf("  state: %s\n", y.State)
-		fmt.Printf("  loc:   %s (%s)\n", dc.LongName, dc.Country)
-		fmt.Printf("  ips:\n")
-		for _, ip := range ips {
-			fmt.Printf("    - %s\n", ip)
-		}
-		fmt.Printf("  disk:  %dG\n", y.Model.Disk)
-		fmt.Printf("  mem:   %dM\n", y.Model.Memory)
-	}
-	return nil
+			if err := c.Get("/vps/"+x+"/ips", &ips); err != nil {
+				return true, err
+			}
+			if err := c.Get("/vps/"+x+"/datacenter", &dc); err != nil {
+				return true, err
+			}
+			fmt.Printf("%s:\n", x)
+			fmt.Printf("  state: %s\n", y.State)
+			fmt.Printf("  loc:   %s (%s)\n", dc.LongName, dc.Country)
+			fmt.Printf("  ips:\n")
+			for _, ip := range ips {
+				fmt.Printf("    - %s\n", ip)
+			}
+			fmt.Printf("  disk:  %dG\n", y.Model.Disk)
+			fmt.Printf("  mem:   %dM\n", y.Model.Memory)
+			return false, nil
+		}, id[string])
 }
 
 func getconsole(c *ovh.Client, v string) error {
-	var in PostInVpsIdGetConsole
-	var out PostOutVpsIdGetConsole
+	var in PostInVPSNameGetConsole
+	var out PostOutVPSNameGetConsole
 
 	if err := c.Post("/vps/"+v+"/getConsoleUrl", &in, &out); err != nil {
 		return err
@@ -400,7 +423,7 @@ func getconsole(c *ovh.Client, v string) error {
 }
 
 func lsips(c *ovh.Client, v string) error {
-	var ips GetVpsIdIps
+	var ips GetVPSNameIps
 	if err := c.Get("/vps/"+v+"/ips", &ips); err != nil {
 		return err
 	}
@@ -411,21 +434,12 @@ func lsips(c *ovh.Client, v string) error {
 }
 
 func lskeys(c *ovh.Client) error {
-	var xs GetMeSSHKey
-	var y GetMeSSHKeyName
-
-	if err := c.Get("/me/sshKey", &xs); err != nil {
-		return err
-	}
-
-	for _, x := range xs {
-		if err := c.Get("/me/sshKey/"+x, &y); err != nil {
-			return err
-		}
-		fmt.Printf("%s %s\n", y.KeyName, y.Key)
-	}
-
-	return nil
+	return forEachItem(c,
+		"/me/sshKey",
+		func(y GetMeSSHKeyName) (bool, error) {
+			fmt.Printf("%s %s\n", y.KeyName, y.Key)
+			return false, nil
+		}, id[string])
 }
 
 func rmkey(c *ovh.Client, n string) error {
@@ -437,6 +451,15 @@ func addkey(c *ovh.Client, n, v string) error {
 	x := PostInMeSSHKey{v, n}
 	var y PostOutMeSSHKey
 	return c.Post("/me/sshKey/", &x, &y)
+}
+
+func lsimgs(c *ovh.Client, v string) error {
+	return forEachItem(c,
+		"/vps/"+v+"/images/available",
+		func(y GetVPSNameImagesAvailableId) (bool, error) {
+			fmt.Printf("%s %s\n", y.Name, y.Id)
+			return false, nil
+		}, id[string])
 }
 
 // ~random; this doesn't match OpenSSH's default
@@ -475,7 +498,8 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// XXX so far, this is useless.
+	// XXX so far, this is useless, remove
+	// ls-imgs is boilerplate free
 	lsvpsCmd := flag.NewFlagSet("ls-vps", flag.ExitOnError)
 	lsappsCmd := flag.NewFlagSet("ls-apps", flag.ExitOnError)
 	rmappsCmd := flag.NewFlagSet("rm-apps", flag.ExitOnError)
@@ -510,6 +534,13 @@ func main() {
 	case "ls-keys":
 		lskeysCmd.Parse(os.Args[2:])
 		if err = lskeys(c); err != nil {
+			log.Fatal(err)
+		}
+	case "ls-imgs":
+		if len(os.Args) <= 2 {
+			help(1)
+		}
+		if err := lsimgs(c, os.Args[2]); err != nil {
 			log.Fatal(err)
 		}
 	case "rm-keys":
