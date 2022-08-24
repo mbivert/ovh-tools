@@ -5,19 +5,19 @@ package main
 
 import (
 	"bytes"
-//	"flag"
+	//	"flag"
 	"fmt"
 	"github.com/ovh/go-ovh/ovh"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
-	"time"
-	"path/filepath"
 	"strings"
+	"time"
 )
 
 // ----------------------------------------------------------------------
@@ -26,9 +26,9 @@ import (
 // https://api.ovh.com/console/#/me/~GET
 // TODO: incomplete
 type GetMe struct {
-	Email           string `json:"email"`
-	Country         string `json:"country"`
-	FirstName       string `json:"firstname"`
+	Email     string `json:"email"`
+	Country   string `json:"country"`
+	FirstName string `json:"firstname"`
 }
 
 // https://api.ovh.com/console/#/me/api/application~GET
@@ -40,7 +40,9 @@ type GetMeApiApplication []int
 type GetMeApiCredential []int
 
 // https://api.ovh.com/console/#/me/api/application/%7BapplicationId%7D~GET
+//
 //	Retrieve meta-data associated to an application ID
+//
 // TODO: ALPHA API
 type GetMeApiApplicationId struct {
 	ApplicationId  int    `json:"applicationId"`
@@ -53,42 +55,42 @@ type GetMeApiApplicationId struct {
 // https://api.ovh.com/console/#/me/api/credential/%7BcredentialId%7D~GET
 // TODO: ALPHA API
 type GetMeApiCredentialIdRule struct {
-	Method         string `json:"method"`
-	Path           string `json:"path"`
+	Method string `json:"method"`
+	Path   string `json:"path"`
 }
 type GetMeApiCredentialId struct {
 	// XXX type uncertain
-	AllowedIPs     []string    `json:"allowedIPs"`
+	AllowedIPs []string `json:"allowedIPs"`
 	// NOTE: 115/168 seem to correspond to the web console
-	ApplicationId  int         `json:"applicationId"`
-	Creation       time.Time   `json:"creation"`
-	CredentialId   int         `json:"credentialId"`
-	Expiration     time.Time   `json:"expiration"`
-	LastUse        time.Time   `json:"lastUse"`
-	OvhSupport     bool        `json:"ovhSupport"`
-	Status         string      `json:"status"`
-	Rules          []GetMeApiCredentialIdRule  `json:"rules"`
+	ApplicationId int                        `json:"applicationId"`
+	Creation      time.Time                  `json:"creation"`
+	CredentialId  int                        `json:"credentialId"`
+	Expiration    time.Time                  `json:"expiration"`
+	LastUse       time.Time                  `json:"lastUse"`
+	OvhSupport    bool                       `json:"ovhSupport"`
+	Status        string                     `json:"status"`
+	Rules         []GetMeApiCredentialIdRule `json:"rules"`
 }
 
 // https://api.ovh.com/console/#/me/api/credential/%7BcredentialId%7D~DELETE
 // TODO: ALPHA API
-type DeleteMeApiCredentialId struct {}
+type DeleteMeApiCredentialId struct{}
 
 // https://api.ovh.com/console/#/vps~GET
 type GetVPS []string
 
 // https://api.ovh.com/console/#/vps/%7BserviceName%7D~GET
 type GetVPSNameModel struct {
-	VCore    int           `json:"vcore"`
-	Disk     int           `json:"disk"`
-	Memory   int           `json:"memory"`
+	VCore  int `json:"vcore"`
+	Disk   int `json:"disk"`
+	Memory int `json:"memory"`
 	// TODO: incomplete
 }
 type GetVPSName struct {
-	State    string          `json:"state"`
-	VCore    int             `json:"vcore"`
-	Model    GetVPSNameModel `json:"model"`
-	Name     string          `json:"name"`
+	State string          `json:"state"`
+	VCore int             `json:"vcore"`
+	Model GetVPSNameModel `json:"model"`
+	Name  string          `json:"name"`
 	// TODO: incomplete
 }
 
@@ -97,26 +99,26 @@ type GetVPSNameIps []string
 
 // https://api.ovh.com/console/#/vps/%7BserviceName%7D/datacenter~GET
 type GetVPSNameDatacenter struct {
-	LongName   string        `json:"longName"`
-	Name       string        `json:"name"`
-	Country    string        `json:"country"`
+	LongName string `json:"longName"`
+	Name     string `json:"name"`
+	Country  string `json:"country"`
 }
 
 // https://api.ovh.com/console/#/vps/%7BserviceName%7D/getConsoleUrl~POST
-type PostInVPSNameGetConsole struct {}
+type PostInVPSNameGetConsole struct{}
 type PostOutVPSNameGetConsole string
 
 // https://api.ovh.com/console/#/me/api/application/%7BapplicationId%7D~DELETE
-type DeleteMeApiApplicationId struct {}
+type DeleteMeApiApplicationId struct{}
 
 // https://api.ovh.com/console/#/me/sshKey~GET
 type GetMeSSHKey []string
 
 // https://api.ovh.com/console/#/me/sshKey/%7BkeyName%7D~GET
 type GetMeSSHKeyName struct {
-	Key         string `json:"key"`
-	KeyName     string `json:"keyName"`
-	Default     bool   `json:"default"`
+	Key     string `json:"key"`
+	KeyName string `json:"keyName"`
+	Default bool   `json:"default"`
 }
 
 // https://api.ovh.com/console/#/me/sshKey/%7BkeyName%7D~DELETE
@@ -124,10 +126,10 @@ type DeleteMeSSHKeyName struct{}
 
 // https://api.ovh.com/console/#/me/sshKey~POST
 type PostInMeSSHKey struct {
-	Key     string  `json:"key"`
-	KeyName string  `json:"keyName"`
+	Key     string `json:"key"`
+	KeyName string `json:"keyName"`
 }
-type PostOutMeSSHKey struct {}
+type PostOutMeSSHKey struct{}
 
 // https://api.ovh.com/console/#/vps/%7BserviceName%7D/images/available~GET
 type GetVPSNameImagesAvailable []string
@@ -177,15 +179,15 @@ var ovhKeyName = "ovh-do-key"
 
 // TODO: make this configurable [-t timeout]
 var poolValidatedTimeout = 2 * time.Minute
-var poolRebuildTimeout   = 5 * time.Minute
+var poolRebuildTimeout = 5 * time.Minute
 
 // Wait a little for the VPS to be up before running
 // resetKnownHosts(), and more generally, to attempt
 // ssh(1) connections. So far, this was enough.
 // TODO: make this configurable
-var waitVPSUp            = 5 * time.Second
+var waitVPSUp = 5 * time.Second
 
-var confFn = os.Getenv("HOME") +"/.ovh.conf"
+var confFn = os.Getenv("HOME") + "/.ovh.conf"
 
 // ----------------------------------------------------------------------
 // functions
@@ -216,7 +218,7 @@ func poolForValidated(c *ovh.Client) error {
 		}
 
 		// TODO: Debug log maybe?
-//		fmt.Println("Pooling...")
+		//		fmt.Println("Pooling...")
 
 		ok, err := isValidated(c)
 		if ok {
@@ -240,7 +242,7 @@ func requestNewKey(c *ovh.Client) (string, error) {
 
 	fmt.Printf("Consumer key:   %s\n", s.ConsumerKey)
 	fmt.Printf("Validatior URL: %s\n", s.ValidationURL)
-	fmt.Println("Waiting for credentials to be validated...");
+	fmt.Println("Waiting for credentials to be validated...")
 
 	if err = poolForValidated(c); err != nil {
 		return "", err
@@ -370,11 +372,12 @@ func help(n int) {
 type Item interface {
 	GetMeApiApplicationId | GetVPSName | GetMeSSHKeyName | GetVPSNameImagesAvailableId
 }
-type ItemId interface { string | int }
+type ItemId interface{ string | int }
+
 func id[T any](x T) T { return x }
 
 func forEachItem[T Item, U ItemId](c *ovh.Client, r string,
-		f func(T) (bool, error), g func(U) string) error {
+	f func(T) (bool, error), g func(U) string) error {
 	var xs []U
 	var y T
 	if err := c.Get(r, &xs); err != nil {
@@ -423,7 +426,7 @@ func rmApp(c *ovh.Client, a string) error {
 					return true, nil
 				}
 				return false, nil
-		}, strconv.Itoa)
+			}, strconv.Itoa)
 
 		if err != nil {
 			return err
@@ -580,7 +583,7 @@ func addKey(c *ovh.Client, n, v string) error {
 }
 
 func forEachImgs(c *ovh.Client, v string,
-		f func(GetVPSNameImagesAvailableId) (bool, error)) error {
+	f func(GetVPSNameImagesAvailableId) (bool, error)) error {
 	return forEachItem(c,
 		"/vps/"+v+"/images/available",
 		f, id[string])
@@ -626,7 +629,7 @@ func getMatchingImg(c *ovh.Client, v string, r string) (string, string, error) {
 				name = y.Name
 				return true, nil
 			}
-			ok, err :=regexp.MatchString(r, y.Name)
+			ok, err := regexp.MatchString(r, y.Name)
 			if err != nil {
 				return true, err
 			}
@@ -677,9 +680,9 @@ func isImgId(s string) bool {
 
 func poolTask(c *ovh.Client, v string, i int) error {
 	done := map[string]bool{
-		"cancelled" : true,
-		"done"      : true,
-		"error"     : true,
+		"cancelled": true,
+		"done":      true,
+		"error":     true,
 	}
 	a := time.Now().Add(poolRebuildTimeout)
 	for {
@@ -724,7 +727,7 @@ func main() {
 
 	// XXX so far, this is useless, remove
 	// ls-imgs is boilerplate free
-//	rmkeysCmd := flag.NewFlagSet("rm-keys", flag.ExitOnError)
+	//	rmkeysCmd := flag.NewFlagSet("rm-keys", flag.ExitOnError)
 
 	if len(os.Args) < 2 {
 		help(1)
@@ -760,7 +763,7 @@ func main() {
 		if len(os.Args) <= 3 {
 			help(1)
 		}
-		id, name, err := getMatchingImg(c, os.Args[2], os.Args[3]);
+		id, name, err := getMatchingImg(c, os.Args[2], os.Args[3])
 		if err != nil {
 			log.Fatal(err)
 		}

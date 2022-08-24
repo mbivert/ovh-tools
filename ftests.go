@@ -3,12 +3,12 @@ package main
 // https://tales.mbivert.com/on-a-function-based-test-framework/
 
 import (
-	"testing"
-	"reflect"
-	"strings"
-	"runtime"
-	"fmt"
 	"encoding/json" // pretty-printing
+	"fmt"
+	"reflect"
+	"runtime"
+	"strings"
+	"testing"
 )
 
 type test struct {
@@ -49,14 +49,14 @@ func doTest(t *testing.T, f interface{}, args []interface{}, expected []interfac
 		}
 		// >= 4 and we get nothing; 3 is asm, 2 is testing, 1 is doTests()
 		// not sure we can do better
-/*
-		_, fn, l, ok := runtime.Caller(3)
-		if !ok {
-			fn = "???"
-			l = 0
-		}
-		fmt.Printf("%s:%d got: '%s', expected: '%s'", fn, l, igot, expected)
-*/
+		/*
+			_, fn, l, ok := runtime.Caller(3)
+			if !ok {
+				fn = "???"
+				l = 0
+			}
+			fmt.Printf("%s:%d got: '%s', expected: '%s'", fn, l, igot, expected)
+		*/
 		// meh, error are printed as {} with JSON.
 		fmt.Printf("got: '%s', expected: '%s'", igot, expected)
 		t.Fatalf("got: '%s', expected: '%s'", sgot, sexp)
