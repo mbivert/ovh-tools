@@ -51,6 +51,25 @@
 .Ar ls-imgs
 .Ar vps
 .Ek
+.Nm
+.Bk -words
+.Ar ls-img
+.Ar vps
+.Ar name|regexp
+.Ek
+.Nm
+.Bk -words
+.Ar rebuild
+.Ar vps
+.Ar img-id|img-name|regexp
+.Op key-name
+.Ek
+.Nm
+.Bk -words
+.Ar rebuild-debian
+.Ar vps
+.Op key-name
+.Ek
 .Sh DESCRIPTION
 .Nm
 wraps access to the OVH HTTP API. It

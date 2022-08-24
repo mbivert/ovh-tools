@@ -25,6 +25,11 @@ bin/ovh-do: ovh-do.go
 	@echo Compiling ovh-do...
 	@go build -o $@ $^
 
+.PHONY: tests
+tests:
+	@echo Running tests...
+	@go test -v ovh-do_test.go ftests.go ovh-do.go
+
 .PHONY: clean
 clean:
 	@echo Remove compiled binaries...

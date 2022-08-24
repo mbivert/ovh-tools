@@ -4,12 +4,14 @@ package main
 //	https://github.com/golang/glog
 
 import (
-	"flag"
+	"bytes"
+//	"flag"
 	"fmt"
 	"github.com/ovh/go-ovh/ovh"
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"regexp"
 	"sort"
 	"strconv"
@@ -17,6 +19,9 @@ import (
 	"path/filepath"
 	"strings"
 )
+
+// ----------------------------------------------------------------------
+// types
 
 // https://api.ovh.com/console/#/me/~GET
 // TODO: incomplete
@@ -133,6 +138,58 @@ type GetVPSNameImagesAvailableId struct {
 	Name string `json:"name"`
 }
 
+type VPSTask struct {
+	DateTime time.Time `json:"datetime"`
+	Id       int       `json:"id"`
+	Progress int       `json:"progress"`
+	State    string    `json:"state"`
+	Type     string    `json:"type"`
+}
+
+// https://api.ovh.com/console/#/vps/%7BserviceName%7D/rebuild~POST
+// TODO: Beta API
+type PostInVPSNameRebuild struct {
+	DoNotSendPassword bool   `json:"doNotSendPassword",omitempty`
+	ImageId           string `json:"imageId"`
+	InstallRTM        bool   `json:"installRTM,omitempty"`
+	SshKey            string `json:"sshKey,omitempty"`
+}
+type PostOutVPSNameRebuild VPSTask
+
+// https://api.ovh.com/console/#/vps/%7BserviceName%7D/tasks/%7Bid%7D~GET
+type GetVPSNameTasksId VPSTask
+
+// ----------------------------------------------------------------------
+// globals/constants
+
+// ~random; this doesn't match OpenSSH's default
+// way of trying keys: rsa, dsa, ecdsa, ed25519
+// TODO: make this clearer
+var preferedKeys = []string{
+	"id_ed25519.pub",
+	"id_rsa.pub",
+	"id_dsa.pub",
+	"id_ecdsa.pub",
+}
+
+// default OVH SSH key name
+var ovhKeyName = "ovh-do-key"
+
+// TODO: make this configurable [-t timeout]
+var poolValidatedTimeout = 2 * time.Minute
+var poolRebuildTimeout   = 5 * time.Minute
+
+// Wait a little for the VPS to be up before running
+// resetKnownHosts(), and more generally, to attempt
+// ssh(1) connections. So far, this was enough.
+// TODO: make this configurable
+var waitVPSUp            = 5 * time.Second
+
+var confFn = os.Getenv("HOME") +"/.ovh.conf"
+
+// ----------------------------------------------------------------------
+// functions
+
 func isValidated(c *ovh.Client) (bool, error) {
 	var y GetMe
 
@@ -147,14 +204,11 @@ func isValidated(c *ovh.Client) (bool, error) {
 	return true, nil
 }
 
-var poolTimeout = 2 * time.Minute
-var confFn = os.Getenv("HOME") +"/.ovh.conf"
-
 // Used after a Ckrequest:  the CkRequest will register the new
 // customer key for use in the client; hence, all (authenticated)
 // requests will now fail until the credential has been validated.
 func poolForValidated(c *ovh.Client) error {
-	a := time.Now().Add(poolTimeout)
+	a := time.Now().Add(poolValidatedTimeout)
 	for {
 		time.Sleep(5 * time.Second)
 		if time.Now().After(a) {
@@ -298,7 +352,7 @@ func getClient() (*ovh.Client, error) {
 	}
 
 	if err = flushExpiredCredentials(c); err != nil {
-		return nil, fmt.Errorf("Flushing expired credentials: nil", err)
+		return nil, fmt.Errorf("Flushing expired credentials: %s", err)
 	}
 
 	return c, nil
@@ -343,7 +397,7 @@ func forEachItem[T Item, U ItemId](c *ovh.Client, r string,
 	return nil
 }
 
-func lsapps(c *ovh.Client) error {
+func lsApps(c *ovh.Client) error {
 	return forEachItem(c,
 		"/me/api/application",
 		func(y GetMeApiApplicationId) (bool, error) {
@@ -354,7 +408,7 @@ func lsapps(c *ovh.Client) error {
 
 // NOTE: we assume a to either be an integer (ie. an ID) or
 // an app name. We could be smarter.
-func rmapp(c *ovh.Client, a string) error {
+func rmApp(c *ovh.Client, a string) error {
 	var z DeleteMeApiApplicationId
 	id, err := strconv.Atoi(a)
 
@@ -383,7 +437,7 @@ func rmapp(c *ovh.Client, a string) error {
 	return c.Delete("/me/api/application/"+strconv.Itoa(id), &z)
 }
 
-func lsvps(c *ovh.Client) error {
+func lsVPS(c *ovh.Client) error {
 	return forEachItem(c,
 		"/vps",
 		func(y GetVPSName) (bool, error) {
@@ -410,7 +464,7 @@ func lsvps(c *ovh.Client) error {
 		}, id[string])
 }
 
-func getconsole(c *ovh.Client, v string) error {
+func getConsole(c *ovh.Client, v string) error {
 	var in PostInVPSNameGetConsole
 	var out PostOutVPSNameGetConsole
 
@@ -422,18 +476,90 @@ func getconsole(c *ovh.Client, v string) error {
 	return nil
 }
 
-func lsips(c *ovh.Client, v string) error {
+func getIPs(c *ovh.Client, v string) (*GetVPSNameIps, error) {
 	var ips GetVPSNameIps
-	if err := c.Get("/vps/"+v+"/ips", &ips); err != nil {
+	err := c.Get("/vps/"+v+"/ips", &ips)
+	return &ips, err
+}
+
+func foreachIPs(c *ovh.Client, v string, f func(string) error) error {
+	ips, err := getIPs(c, v)
+	if err != nil {
 		return err
 	}
-	for _, ip := range ips {
-		fmt.Println(ip)
+	for _, ip := range *ips {
+		if err := f(ip); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-func lskeys(c *ovh.Client) error {
+func lsIPs(c *ovh.Client, v string) error {
+	return foreachIPs(c, v, func(x string) error {
+		fmt.Println(x)
+		return nil
+	})
+}
+
+func removeKnownHosts(ip string) error {
+	cmd := exec.Command("ssh-keygen", "-R", ip)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		fmt.Println(out)
+	}
+	return err
+}
+
+func addKnownHosts(ip string) error {
+	var outb, errb bytes.Buffer
+
+	cmd := exec.Command("ssh-keyscan", "-H", ip)
+	cmd.Stdout = &outb
+	cmd.Stderr = &errb
+
+	// NOTE: IPs are not always all in use: for instance
+	// by default, IPv6 aren't connected, so ssh-keyscan(1)
+	// will fail (Network is unreachable)
+	//
+	// This is a bit clumsy; we could try pinging the IP
+	// beforehand (but still, sshd(8) may not run there).
+	if err := cmd.Run(); err != nil {
+		log.Printf("Warning: ssh-keyscan '%s' failed:\n", ip)
+		for _, x := range strings.Split(errb.String(), "\n") {
+			log.Println(x)
+		}
+		return nil
+	}
+
+	fn := filepath.Join(os.Getenv("HOME"), "/.ssh/known_hosts")
+	f, err := os.OpenFile(fn, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+
+	defer f.Close()
+
+	if _, err := f.WriteString(outb.String()); err != nil {
+		log.Println(err)
+	}
+
+	return nil
+}
+
+func doResetKnownHosts(ip string) error {
+	err := removeKnownHosts(ip)
+	if err == nil {
+		err = addKnownHosts(ip)
+	}
+	return err
+}
+
+func resetKnownHosts(c *ovh.Client, v string) error {
+	return foreachIPs(c, v, doResetKnownHosts)
+}
+
+func lsKeys(c *ovh.Client) error {
 	return forEachItem(c,
 		"/me/sshKey",
 		func(y GetMeSSHKeyName) (bool, error) {
@@ -442,38 +568,88 @@ func lskeys(c *ovh.Client) error {
 		}, id[string])
 }
 
-func rmkey(c *ovh.Client, n string) error {
+func rmKey(c *ovh.Client, n string) error {
 	var x DeleteMeSSHKeyName
 	return c.Delete("/me/sshKey/"+n, &x)
 }
 
-func addkey(c *ovh.Client, n, v string) error {
+func addKey(c *ovh.Client, n, v string) error {
 	x := PostInMeSSHKey{v, n}
 	var y PostOutMeSSHKey
 	return c.Post("/me/sshKey/", &x, &y)
 }
 
-func lsimgs(c *ovh.Client, v string) error {
+func forEachImgs(c *ovh.Client, v string,
+		f func(GetVPSNameImagesAvailableId) (bool, error)) error {
 	return forEachItem(c,
 		"/vps/"+v+"/images/available",
+		f, id[string])
+}
+
+func lsImgs(c *ovh.Client, v string) error {
+	return forEachImgs(c, v,
 		func(y GetVPSNameImagesAvailableId) (bool, error) {
-			fmt.Printf("%s %s\n", y.Name, y.Id)
+			fmt.Printf("%s\t%s\n", y.Name, y.Id)
 			return false, nil
-		}, id[string])
+		})
 }
 
-// ~random; this doesn't match OpenSSH's default
-// way of trying keys: rsa, dsa, ecdsa, ed25519
-// TODO: make this clearer
-var preferedKeys = []string{
-	"id_ed25519.pub",
-	"id_rsa.pub",
-	"id_dsa.pub",
-	"id_ecdsa.pub",
+func splitImgName(s string) (string, float64, string, error) {
+	re := regexp.MustCompile(`^([^0-9]+) ([0-9]+(?:\.[0-9]+)?)(.*)$`)
+	xs := re.FindStringSubmatch(s)
+	if xs == nil || len(xs) == 0 {
+		return "", -1., "", fmt.Errorf("Invalid version name: '%s'", s)
+	}
+
+	// should never fail given regexp
+	v, err := strconv.ParseFloat(xs[2], 64)
+	if err != nil {
+		return "", -1., "", fmt.Errorf("Invalid version number: '%s' (%s)", s, xs[2])
+	}
+
+	return xs[1], v, xs[3], nil
 }
 
-// default OVH SSH key name
-var ovhKeyName = "ovh-do-key2"
+// if r exactly matches an image name, return this image
+// if r as a regexp match an image name, use the image with
+// biggest version number
+func getMatchingImg(c *ovh.Client, v string, r string) (string, string, error) {
+	a := -1.
+	id := ""
+	name := ""
+	e := ""
+	err := forEachImgs(c, v,
+		func(y GetVPSNameImagesAvailableId) (bool, error) {
+			// exact match
+			if y.Name == r {
+				id = y.Id
+				name = y.Name
+				return true, nil
+			}
+			ok, err :=regexp.MatchString(r, y.Name)
+			if err != nil {
+				return true, err
+			}
+			if ok {
+				_, b, f, err := splitImgName(y.Name)
+				if err != nil {
+					return true, err
+				}
+				// NOTE: arbitrarily always choose
+				// version who do *not* have extras.
+				// e.g. "Debian 10" will be selected
+				// in front of "Debian 10 - Docker"
+				if (b == a && e != "" && f == "") || b > a {
+					a = b
+					id = y.Id
+					name = y.Name
+					e = f
+				}
+			}
+			return false, nil
+		})
+	return id, name, err
+}
 
 // read a SSH key from $HOME/.ssh
 func readSSHKey() (string, error) {
@@ -492,6 +668,54 @@ func readSSHKey() (string, error) {
 	return "", fmt.Errorf("No SSH key found!")
 }
 
+// e.g. f4b12e37-4241-4301-aadf-85ae34cdd6a9
+func isImgId(s string) bool {
+	h := "[0-9a-fA-F]"
+	r := fmt.Sprintf("^%s{8}-%s{4}-%s{4}-%s{4}-%s{12}$", h, h, h, h, h)
+	return regexp.MustCompile(r).MatchString(s)
+}
+
+func poolTask(c *ovh.Client, v string, i int) error {
+	done := map[string]bool{
+		"cancelled" : true,
+		"done"      : true,
+		"error"     : true,
+	}
+	a := time.Now().Add(poolRebuildTimeout)
+	for {
+		time.Sleep(5 * time.Second)
+		if time.Now().After(a) {
+			break
+		}
+
+		var x GetVPSNameTasksId
+
+		if err := c.Get("/vps/"+v+"/tasks/"+strconv.Itoa(i), &x); err != nil {
+			return err
+		}
+		if _, ok := done[x.State]; ok {
+			return nil
+		}
+
+		fmt.Printf("%d%%\n", x.Progress)
+	}
+
+	return fmt.Errorf("Rebuild pooling timeout")
+}
+
+func rebuildPoolResetKnownHosts(c *ovh.Client, v, i, kn string) error {
+	x := PostInVPSNameRebuild{true, i, false, kn}
+	var y PostOutVPSNameRebuild
+	if err := c.Post("/vps/"+v+"/rebuild", &x, &y); err != nil {
+		return err
+	}
+	if err := poolTask(c, v, y.Id); err != nil {
+		return err
+	}
+	time.Sleep(waitVPSUp)
+	return resetKnownHosts(c, v)
+}
+
 func main() {
 	c, err := getClient()
 	if err != nil {
@@ -500,14 +724,7 @@ func main() {
 
 	// XXX so far, this is useless, remove
 	// ls-imgs is boilerplate free
-	lsvpsCmd := flag.NewFlagSet("ls-vps", flag.ExitOnError)
-	lsappsCmd := flag.NewFlagSet("ls-apps", flag.ExitOnError)
-	rmappsCmd := flag.NewFlagSet("rm-apps", flag.ExitOnError)
-	getconsoleCmd := flag.NewFlagSet("get-console", flag.ExitOnError)
-	lsipsCmd := flag.NewFlagSet("ls-ips", flag.ExitOnError)
-	lskeysCmd := flag.NewFlagSet("ls-keys", flag.ExitOnError)
-	rmkeysCmd := flag.NewFlagSet("rm-keys", flag.ExitOnError)
-	addkeyCmd := flag.NewFlagSet("add-key", flag.ExitOnError)
+//	rmkeysCmd := flag.NewFlagSet("rm-keys", flag.ExitOnError)
 
 	if len(os.Args) < 2 {
 		help(1)
@@ -515,82 +732,123 @@ func main() {
 
 	switch os.Args[1] {
 	case "ls-apps":
-		lsappsCmd.Parse(os.Args[2:])
-		if err = lsapps(c); err != nil {
+		if err = lsApps(c); err != nil {
 			log.Fatal(err)
 		}
 	case "rm-apps":
-		rmappsCmd.Parse(os.Args[2:])
-		for i := 0; i < rmappsCmd.NArg(); i++ {
-			if err = rmapp(c, rmappsCmd.Arg(0)); err != nil {
+		for i := 2; i < len(os.Args); i++ {
+			if err = rmApp(c, os.Args[i]); err != nil {
 				log.Fatal(err)
 			}
 		}
 	case "ls-vps":
-		lsvpsCmd.Parse(os.Args[2:])
-		if err = lsvps(c); err != nil {
+		if err = lsVPS(c); err != nil {
 			log.Fatal(err)
 		}
 	case "ls-keys":
-		lskeysCmd.Parse(os.Args[2:])
-		if err = lskeys(c); err != nil {
+		if err = lsKeys(c); err != nil {
 			log.Fatal(err)
 		}
 	case "ls-imgs":
 		if len(os.Args) <= 2 {
 			help(1)
 		}
-		if err := lsimgs(c, os.Args[2]); err != nil {
+		if err := lsImgs(c, os.Args[2]); err != nil {
+			log.Fatal(err)
+		}
+	case "ls-img":
+		if len(os.Args) <= 3 {
+			help(1)
+		}
+		id, name, err := getMatchingImg(c, os.Args[2], os.Args[3]);
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("%s\t%s\n", name, id)
+	case "rebuild":
+		if len(os.Args) <= 3 {
+			help(1)
+		}
+		v := os.Args[2]
+		i := os.Args[3]
+		if !isImgId(i) {
+			var err error
+			var in string
+			i, in, err = getMatchingImg(c, v, i)
+			if err != nil {
+				log.Fatal(err)
+			}
+			log.Printf("Installing %s (%s) to %s\n", in, i, v)
+		}
+		kn := ovhKeyName
+		if len(os.Args) > 4 {
+			kn = os.Args[4]
+		}
+		if err := rebuildPoolResetKnownHosts(c, v, i, kn); err != nil {
+			log.Fatal(err)
+		}
+	// shortcut
+	case "rebuild-debian":
+		if len(os.Args) <= 2 {
+			help(1)
+		}
+		v := os.Args[2]
+		i, in, err := getMatchingImg(c, v, "Debian")
+		if err != nil {
+			log.Fatal(err)
+		}
+		kn := ovhKeyName
+		if len(os.Args) > 3 {
+			kn = os.Args[3]
+		}
+		log.Printf("Installing %s (%s) to %s; key=%s\n", in, i, v, kn)
+		if err := rebuildPoolResetKnownHosts(c, v, i, kn); err != nil {
 			log.Fatal(err)
 		}
 	case "rm-keys":
-		rmkeysCmd.Parse(os.Args[2:])
-		for i := 0; i < rmkeysCmd.NArg(); i++ {
-			if err = rmkey(c, rmkeysCmd.Arg(0)); err != nil {
+		for i := 2; i < len(os.Args); i++ {
+			if err = rmKey(c, os.Args[i]); err != nil {
 				log.Fatal(err)
 			}
 		}
 	case "add-key":
-		addkeyCmd.Parse(os.Args[2:])
-		name := ovhKeyName
-		var key string
+		kn := ovhKeyName
+		var k string
 		var err error
-		if addkeyCmd.NArg() <= 1 {
-			if key, err = readSSHKey(); err != nil {
+		if len(os.Args) <= 2 {
+			if k, err = readSSHKey(); err != nil {
 				log.Fatal(err)
 			}
 		}
-		if addkeyCmd.NArg() >= 1 {
-			name = addkeyCmd.Arg(0)
+		if len(os.Args) >= 3 {
+			kn = os.Args[2]
 		}
-		if addkeyCmd.NArg() >= 2 {
-			s, err := os.ReadFile(addkeyCmd.Arg(1))
+		if len(os.Args) >= 4 {
+			s, err := os.ReadFile(os.Args[3])
 			if err != nil && !os.IsNotExist(err) {
 				log.Fatal(err)
 			} else if err == nil {
-				key = strings.TrimSuffix(string(s), "\n")
+				k = strings.TrimSuffix(string(s), "\n")
 			} else {
-				key = addkeyCmd.Arg(1)
+				k = os.Args[3]
 			}
 		}
-		fmt.Println(name, key)
-		if err = addkey(c, name, key); err != nil {
+		fmt.Println(kn, k)
+		if err = addKey(c, kn, k); err != nil {
 			log.Fatal(err)
 		}
 	case "get-console":
-		getconsoleCmd.Parse(os.Args[2:])
-		if getconsoleCmd.NArg() == 0 {
+		if len(os.Args) < 3 {
 			help(1)
 		}
-		if err = getconsole(c, getconsoleCmd.Arg(0)); err != nil {
+		if err = getConsole(c, os.Args[2]); err != nil {
 			log.Fatal(err)
 		}
 	case "ls-ips":
-		lsipsCmd.Parse(os.Args[2:])
-		if lsipsCmd.NArg() == 0 {
+		if len(os.Args) < 3 {
 			help(1)
 		}
-		if err = lsips(c, lsipsCmd.Arg(0)); err != nil {
+		if err = lsIPs(c, os.Args[2]); err != nil {
 			log.Fatal(err)
 		}
 	case "help":
