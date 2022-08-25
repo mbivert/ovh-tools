@@ -60,7 +60,7 @@ type GetMeApiCredentialIdRule struct {
 }
 type GetMeApiCredentialId struct {
 	// XXX type uncertain
-	AllowedIPs []string `json:"allowedIPs"`
+	AllowedIPs    []string                   `json:"allowedIPs"`
 	// NOTE: 115/168 seem to correspond to the web console
 	ApplicationId int                        `json:"applicationId"`
 	Creation      time.Time                  `json:"creation"`
@@ -529,7 +529,8 @@ func addKnownHosts(ip string) error {
 	// beforehand (but still, sshd(8) may not run there).
 	if err := cmd.Run(); err != nil {
 		log.Printf("Warning: ssh-keyscan '%s' failed:\n", ip)
-		for _, x := range strings.Split(errb.String(), "\n") {
+		xs := strings.TrimSpace(errb.String())
+		for _, x := range strings.Split(xs, "\n") {
 			log.Println(x)
 		}
 		return nil
