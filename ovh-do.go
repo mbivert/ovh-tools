@@ -161,6 +161,42 @@ type PostOutVPSNameRebuild VPSTask
 // https://api.ovh.com/console/#/vps/%7BserviceName%7D/tasks/%7Bid%7D~GET
 type GetVPSNameTasksId VPSTask
 
+// https://api.ovh.com/console/#/domain/zone~GET
+type GetDomainZone []string
+
+// https://api.ovh.com/console/#/domain/zone/%7BzoneName%7D~GET
+type GetDomainZoneZoneName struct {
+	DnssecSupported bool      `json:"dnssecSupported"`
+	LastUpdate      time.Time `json:"lastUpdate"`
+	HasDnsAnycast   bool      `json:"hasDnsAnycast"`
+	Name            string    `json:"name"`
+	NameServers     []string  `json:"nameServers"`
+}
+
+// https://api.ovh.com/console/#/domain/zone/%7BzoneName%7D/export~GET
+type GetDomainZoneZoneNameExport string
+
+// https://api.ovh.com/console/#/domain/zone/%7BzoneName%7D/history~GET
+// TODO: Beta API
+type GetDomainZoneZoneNameHistory []string
+
+// https://api.ovh.com/console/#/domain/zone/%7BzoneName%7D/history/%7BcreationDate%7D~GET
+// TODO: Beta API
+type GetDomainZoneZoneNameHistoryCreationDate struct {
+	ZoneFileUrl  string    `json:"zoneFileUrl"`
+	CreationDate time.Time `json:"creationDate"`
+}
+
+// https://api.ovh.com/console/#/domain/zone/%7BzoneName%7D/import~POST
+// TODO: implement
+type PostDomainZoneZoneNameExport struct {
+	ZoneFile string `json:"zoneFile"`
+}
+
+// https://api.ovh.com/console/#/domain/zone/%7BzoneName%7D/history/%7BcreationDate%7D/restore~POST
+// TODO: Beta API
+// TODO: implement
+
 // ----------------------------------------------------------------------
 // globals/constants
 
@@ -370,7 +406,7 @@ func help(n int) {
 //
 // This is a bit clumsy so far, but works.
 type Item interface {
-	GetMeApiApplicationId | GetVPSName | GetMeSSHKeyName | GetVPSNameImagesAvailableId
+	GetMeApiApplicationId | GetVPSName | GetMeSSHKeyName | GetVPSNameImagesAvailableId | GetDomainZoneZoneName | GetDomainZoneZoneNameHistoryCreationDate
 }
 type ItemId interface{ string | int }
 
@@ -526,7 +562,7 @@ func addKnownHosts(ip string) error {
 	// will fail (Network is unreachable)
 	//
 	// This is a bit clumsy; we could try pinging the IP
-	// beforehand (but still, sshd(8) may not run there).
+	// beforehand (but still, sshd(8) may not be listening).
 	if err := cmd.Run(); err != nil {
 		log.Printf("Warning: ssh-keyscan '%s' failed:\n", ip)
 		xs := strings.TrimSpace(errb.String())
@@ -720,6 +756,33 @@ func rebuildPoolResetKnownHosts(c *ovh.Client, v, i, kn string) error {
 	return resetKnownHosts(c, v)
 }
 
+func lsZones(c *ovh.Client) error {
+	return forEachItem(c,
+		"/domain/zone",
+		func(y GetDomainZoneZoneName) (bool, error) {
+			fmt.Printf("%-30s %-30s %s\n", y.Name, y.LastUpdate, strings.Join(y.NameServers, ", "))
+			return false, nil
+		}, id[string])
+}
+
+func getZone(c *ovh.Client, z string) error {
+	var x GetDomainZoneZoneNameExport
+	if err := c.Get("/domain/zone/"+z+"/export", &x); err != nil {
+		return err
+	}
+	fmt.Printf("%s", x)
+	return nil
+}
+
+func lsZoneBackups(c *ovh.Client, z string) error {
+	return forEachItem(c,
+		"/domain/zone/"+z+"/history",
+		func(y GetDomainZoneZoneNameHistoryCreationDate) (bool, error) {
+			fmt.Printf("%-30s %s\n", y.CreationDate, y.ZoneFileUrl)
+			return false, nil
+		}, id[string])
+}
+
 func main() {
 	c, err := getClient()
 	if err != nil {
@@ -853,6 +916,24 @@ func main() {
 			help(1)
 		}
 		if err = lsIPs(c, os.Args[2]); err != nil {
+			log.Fatal(err)
+		}
+	case "ls-zones":
+		if err = lsZones(c); err != nil {
+			log.Fatal(err)
+		}
+	case "get-zone":
+		if len(os.Args) < 3 {
+			help(1)
+		}
+		if err = getZone(c, os.Args[2]); err != nil {
+			log.Fatal(err)
+		}
+	case "ls-zone-backups":
+		if len(os.Args) < 3 {
+			help(1)
+		}
+		if err = lsZoneBackups(c, os.Args[2]); err != nil {
 			log.Fatal(err)
 		}
 	case "help":
